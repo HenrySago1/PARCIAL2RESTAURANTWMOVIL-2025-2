@@ -1,61 +1,118 @@
 // -----------------------------------------------------------------
 // ARCHIVO COMPLETO: lib/table_selection_screen.dart
-// (Versión con lógica de disponibilidad)
+// (Versión con Date Picker + Lógica "Fake UTC")
 // -----------------------------------------------------------------
 
-import 'dart:convert'; // Para decodificar el JSON
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http; // <-- CORRECTO
+import 'package:http/http.dart' as http;
+import 'package:intl/intl.dart'; // Importamos el formateador de fecha
 
-import 'booking_form_screen.dart'; // Importamos la pantalla del formulario
-// ¡YA NO USAMOS GRAPHQL AQUÍ!
+import 'booking_form_screen.dart';
 
-// 1. Convertimos la pantalla a un StatefulWidget
 class TableSelectionScreen extends StatefulWidget {
   @override
   _TableSelectionScreenState createState() => _TableSelectionScreenState();
 }
 
 class _TableSelectionScreenState extends State<TableSelectionScreen> {
-  final _fechaController = TextEditingController();
+  // El controlador que guarda la fecha en formato "Fake UTC" (para la API)
+  final _fechaApiController = TextEditingController();
+  // Este controlador es SÓLO para mostrar la fecha bonita al usuario
+  final _fechaDisplayController = TextEditingController();
+
   final _formKey = GlobalKey<FormState>();
 
-  // 2. Una variable para guardar la lista de mesas disponibles
   List<dynamic> _mesasDisponibles = [];
   bool _isLoading = false;
 
-  // 3. La función que llama a tu nueva API de Strapi
+  // --- FUNCIÓN DE DATE/TIME PICKER (CORREGIDA) ---
+  Future<void> _selectDateTime(BuildContext context) async {
+    // Corrección del bug "mar, 11 nov"
+    final DateTime today = DateTime.now();
+    final DateTime midnightToday = DateTime(today.year, today.month, today.day);
+
+    // 1. Pedir la Fecha (Calendario)
+    final DateTime? pickedDate = await showDatePicker(
+      context: context,
+      initialDate: midnightToday, // Usa la medianoche de hoy
+      firstDate: midnightToday, // La primera fecha seleccionable es hoy
+      lastDate: midnightToday.add(Duration(days: 30)),
+    );
+
+    if (pickedDate == null) {
+      return; // El usuario canceló
+    }
+
+    // 2. Pedir la Hora (Reloj)
+    final TimeOfDay? pickedTime = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.now(),
+    );
+
+    if (pickedTime == null) {
+      return; // El usuario canceló
+    }
+
+    // 3. Combinar Fecha y Hora
+    final DateTime finalDateTime = DateTime(
+      pickedDate.year,
+      pickedDate.month,
+      pickedDate.day,
+      pickedTime.hour,
+      pickedTime.minute,
+    );
+
+    // 4. Formatear para el USUARIO (ej: "10 de Nov, 08:30 PM")
+    final String displayFormat =
+        DateFormat('EEE, d MMM, hh:mm a', 'es').format(finalDateTime);
+    _fechaDisplayController.text = displayFormat;
+
+    // 5. Formatear para la API (LA SOLUCIÓN "FAKE UTC")
+    // "Mentimos" y decimos que la hora local ES la hora UTC
+    // para que Strapi la muestre correctamente.
+    final DateTime fakeUtcDateTime = DateTime.utc(
+      finalDateTime.year,
+      finalDateTime.month,
+      finalDateTime.day,
+      finalDateTime.hour,
+      finalDateTime.minute,
+    );
+    // Esto genera: "2025-11-10T20:00:00.000Z"
+    // (La hora local, pero con la Z que el servidor necesita)
+    final String apiFormat = fakeUtcDateTime.toIso8601String();
+    _fechaApiController.text = apiFormat;
+  }
+  // --- Fin de la función ---
+
+  // La función de buscar mesas (usa _fechaApiController)
   Future<void> _buscarMesasDisponibles() async {
     if (!_formKey.currentState!.validate()) {
-      return; // Si el formulario no es válido, no hagas nada
+      return;
     }
 
     setState(() {
-      _isLoading = true; // Mostrar spinner
-      _mesasDisponibles = []; // Limpiar resultados anteriores
+      _isLoading = true;
+      _mesasDisponibles = [];
     });
 
     try {
-      // ¡Recuerda! 10.0.2.2 para emulador Android
       final url = Uri.parse(
-          'http://10.0.2.2:1337/api/mesas/disponibles?fecha_hora=${_fechaController.text}');
+          'http://10.0.2.2:1337/api/mesas/disponibles?fecha_hora=${_fechaApiController.text}');
 
       final response = await http.get(url);
 
       if (response.statusCode == 200) {
-        // Éxito
         final data = json.decode(response.body);
         setState(() {
-          _mesasDisponibles = data['data']; // Guardamos la lista de mesas
+          _mesasDisponibles = data['data'];
           _isLoading = false;
         });
       } else {
-        // Error del servidor
         throw Exception('Error del servidor: ${response.body}');
       }
     } catch (e) {
-      // Error de red o al parsear
       setState(() {
         _isLoading = false;
       });
@@ -75,19 +132,25 @@ class _TableSelectionScreenState extends State<TableSelectionScreen> {
         padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
-            // 4. El formulario para pedir la fecha
             Form(
               key: _formKey,
               child: Column(
                 children: [
                   TextFormField(
-                    controller: _fechaController,
+                    controller:
+                        _fechaDisplayController, // Muestra la fecha bonita
                     decoration: InputDecoration(
-                      labelText: 'Fecha y Hora (AAAA-MM-DDTHH:MM:SSZ)',
-                      hintText: '2025-11-10T22:00:00Z',
+                      labelText: 'Fecha y Hora',
+                      hintText: 'Toca para seleccionar',
+                      suffixIcon: Icon(Icons.calendar_today),
                     ),
-                    validator: (value) =>
-                        value!.isEmpty ? 'Ingresa una fecha' : null,
+                    readOnly: true, // Evita que el usuario escriba
+                    onTap: () {
+                      _selectDateTime(context);
+                    },
+                    validator: (value) => value!.isEmpty
+                        ? 'Por favor, selecciona una fecha y hora'
+                        : null,
                   ),
                   SizedBox(height: 12),
                   ElevatedButton(
@@ -97,23 +160,17 @@ class _TableSelectionScreenState extends State<TableSelectionScreen> {
                 ],
               ),
             ),
-
             SizedBox(height: 20),
-
-            // 5. El área de resultados
             Expanded(
               child: _isLoading
                   ? Center(child: CircularProgressIndicator())
                   : _mesasDisponibles.isEmpty
-                      ? Center(
-                          child:
-                              Text('No hay mesas disponibles para esta hora.'))
+                      ? Center(child: Text('Toca "Buscar" para ver mesas.'))
                       : ListView.builder(
                           itemCount: _mesasDisponibles.length,
                           itemBuilder: (context, index) {
                             final mesa = _mesasDisponibles[index];
-                            final String mesaId =
-                                mesa['id'].toString(); // ¡Ojo! ID es int
+                            final String mesaId = mesa['id'].toString();
                             final String mesaNumero =
                                 mesa['attributes']['numero'];
                             final int mesaCapacidad =
@@ -126,13 +183,14 @@ class _TableSelectionScreenState extends State<TableSelectionScreen> {
                                   Text('Capacidad: $mesaCapacidad personas'),
                               trailing: Icon(Icons.chevron_right),
                               onTap: () {
-                                // Navegamos al formulario final
                                 Navigator.push(
                                   context,
                                   MaterialPageRoute(
                                     builder: (context) => BookingFormScreen(
                                       mesaId: mesaId,
                                       mesaNumero: mesaNumero,
+                                      // ¡Enviamos la fecha "Fake UTC" al formulario!
+                                      fechaHora: _fechaApiController.text,
                                     ),
                                   ),
                                 );

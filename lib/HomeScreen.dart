@@ -1,23 +1,27 @@
 // -----------------------------------------------------------------
 // ARCHIVO COMPLETO: lib/home_screen.dart
-// (Versión Final)
+// (Versión con "Analizar" en la tarjeta y "Reservar" flotante)
 // -----------------------------------------------------------------
+
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:graphql_flutter/graphql_flutter.dart';
+import 'package:http/http.dart' as http;
+// Importaciones para la IA
+import 'package:image_picker/image_picker.dart';
 
-// --- ¡CAMBIO AQUÍ! ---
-// Ahora importamos la nueva pantalla de selección
-import 'table_selection_screen.dart';
+import 'analysis_result_screen.dart';
+import 'table_selection_screen.dart'; // Para el botón de reservar
 
-// 1. La consulta (sigue igual, pide la foto)
+// La consulta (pide foto y nombre)
 final String getPlatillosQuery = """
   query {
     platillos {
       data {
         id
         attributes {
-          nombre
+          nombre 
           precio
           foto {
             data {
@@ -33,6 +37,101 @@ final String getPlatillosQuery = """
 """;
 
 class HomeScreen extends StatelessWidget {
+  // 1. La función de ANÁLISIS (sigue igual)
+  Future<void> _analizarPlato(BuildContext context, String nombrePlato) async {
+    final ImagePicker picker = ImagePicker();
+    XFile? foto;
+
+    // 1. Mostrar diálogo para elegir Cámara o Galería
+    await showModalBottomSheet(
+      context: context,
+      builder: (BuildContext bc) {
+        return SafeArea(
+          child: Wrap(
+            children: <Widget>[
+              ListTile(
+                  leading: Icon(Icons.photo_library),
+                  title: Text('Elegir de la Galería'),
+                  onTap: () async {
+                    foto = await picker.pickImage(source: ImageSource.gallery);
+                    Navigator.of(context).pop();
+                  }),
+              ListTile(
+                leading: Icon(Icons.photo_camera),
+                title: Text('Tomar Foto'),
+                onTap: () async {
+                  foto = await picker.pickImage(source: ImageSource.camera);
+                  Navigator.of(context).pop();
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (foto != null) {
+      // 2. Mostrar un diálogo de "cargando"
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (BuildContext context) {
+          return Dialog(
+            child: Padding(
+              padding: const EdgeInsets.all(20.0),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(width: 20),
+                  Text("Analizando plato..."),
+                ],
+              ),
+            ),
+          );
+        },
+      );
+
+      // 3. Crear la URL
+      var uri = Uri.parse('http://10.0.2.2:8000/analizar-plato');
+
+      // 4. Crear la petición
+      var request = http.MultipartRequest('POST', uri)
+        ..files.add(await http.MultipartFile.fromPath(
+          'foto',
+          foto!.path,
+          filename: foto!.name,
+        ))
+        ..fields['nombre_plato'] = nombrePlato;
+
+      // 5. Enviar la petición
+      var streamedResponse = await request.send();
+      var response = await http.Response.fromStream(streamedResponse);
+
+      // 6. Cerrar el diálogo de "cargando"
+      Navigator.pop(context); // Cierra el diálogo
+
+      if (response.statusCode == 200) {
+        // ¡Éxito!
+        final Map<String, dynamic> resultados = json.decode(response.body);
+
+        // 7. Navegar a la pantalla de resultados
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => AnalysisResultScreen(resultados: resultados),
+          ),
+        );
+      } else {
+        // Error del servidor de IA
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error del servidor de IA: ${response.body}')),
+        );
+      }
+    }
+  }
+
+  // --- EL WIDGET BUILD ---
   @override
   Widget build(BuildContext context) {
     final String strapiBaseUrl = "http://10.0.2.2:1337";
@@ -40,7 +139,6 @@ class HomeScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: Text('Menú del Restaurante')),
 
-      // 2. El cuerpo sigue siendo el GridView de tarjetas
       body: Query(
         options: QueryOptions(
           document: gql(getPlatillosQuery),
@@ -67,11 +165,12 @@ class HomeScreen extends StatelessWidget {
               crossAxisCount: 2,
               crossAxisSpacing: 10.0,
               mainAxisSpacing: 10.0,
-              childAspectRatio: 0.85, // Ajusta el tamaño (un poco más corto)
+              childAspectRatio: 0.75, // Un poco más alto para el botón
             ),
             itemCount: platillos.length,
             itemBuilder: (context, index) {
               final platillo = platillos[index]['attributes'];
+              final String nombrePlato = platillo['nombre'];
 
               String? imageUrl;
               try {
@@ -80,8 +179,7 @@ class HomeScreen extends StatelessWidget {
                 imageUrl = "$strapiBaseUrl$imagePath";
               } catch (e) {}
 
-              // 3. ¡TARJETA SIMPLIFICADA!
-              // Ahora no tiene los botones
+              // 2. ¡TARJETA CON UN SOLO BOTÓN!
               return Card(
                 elevation: 4.0,
                 clipBehavior: Clip.antiAlias,
@@ -105,9 +203,9 @@ class HomeScreen extends StatelessWidget {
 
                     // --- El Nombre y Precio ---
                     Padding(
-                      padding: const EdgeInsets.all(8.0),
+                      padding: const EdgeInsets.fromLTRB(8.0, 8.0, 8.0, 4.0),
                       child: Text(
-                        platillo['nombre'],
+                        nombrePlato,
                         style: TextStyle(
                             fontSize: 16, fontWeight: FontWeight.bold),
                         maxLines: 1,
@@ -121,6 +219,17 @@ class HomeScreen extends StatelessWidget {
                         style: TextStyle(fontSize: 14, color: Colors.grey[700]),
                       ),
                     ),
+
+                    // 3. ¡BOTÓN "ANALIZAR" DENTRO DE LA TARJETA!
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                      child: TextButton(
+                        child: Text('Analizar Plato'),
+                        onPressed: () {
+                          _analizarPlato(context, nombrePlato);
+                        },
+                      ),
+                    )
                   ],
                 ),
               );
@@ -129,38 +238,16 @@ class HomeScreen extends StatelessWidget {
         },
       ),
 
-      // 4. ¡NUEVO BOTTOM NAVIGATION BAR!
-      // Aquí están tus dos botones fijos
-      bottomNavigationBar: BottomNavigationBar(
-        items: const <BottomNavigationBarItem>[
-          BottomNavigationBarItem(
-            icon: Icon(Icons.calendar_today),
-            label: 'Reservar',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.image_search), // Icono para "Analizar"
-            label: 'Analizar Plato',
-          ),
-        ],
-
-        // 5. La lógica para saber qué botón se tocó
-        onTap: (int index) {
-          if (index == 0) {
-            // --- Tocado "Reservar" ---
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (context) => TableSelectionScreen()),
-            );
-          } else if (index == 1) {
-            // --- Tocado "Analizar Plato" ---
-            // TODO: Aquí irá la lógica de "Analizar Plato" (IA)
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                  content: Text(
-                      'Función de IA (Analizar Plato) no implementada aún.')),
-            );
-          }
+      // 4. ¡BOTÓN "RESERVAR" FLOTANTE Y GLOBAL!
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (context) => TableSelectionScreen()),
+          );
         },
+        icon: Icon(Icons.calendar_today),
+        label: Text('Reservar'),
       ),
     );
   }

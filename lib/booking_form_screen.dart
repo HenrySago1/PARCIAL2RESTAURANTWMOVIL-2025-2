@@ -1,13 +1,12 @@
 // -----------------------------------------------------------------
 // ARCHIVO COMPLETO: lib/booking_form_screen.dart
-// (Tu antiguo "reservation_screen.dart" renombrado)
+// (Versión que LEE la hora UTC y la muestra LOCAL)
 // -----------------------------------------------------------------
 
 import 'package:flutter/material.dart';
 import 'package:graphql_flutter/graphql_flutter.dart';
+import 'package:intl/intl.dart';
 
-// 1. LA MUTACIÓN (¡ACTUALIZADA!)
-// Ahora acepta $mesaId y lo pasa en los datos.
 final String createReservaMutation = """
   mutation CreateReserva(
       \$nombre: String!, 
@@ -34,13 +33,16 @@ final String createReservaMutation = """
   }
 """;
 
-// Esta pantalla ahora espera el ID y número de la mesa
 class BookingFormScreen extends StatefulWidget {
   final String mesaId;
   final String mesaNumero;
+  final String fechaHora; // <-- Recibe la fecha UTC (ej: ...Z)
 
-  // El constructor ahora requiere los datos de la mesa
-  BookingFormScreen({required this.mesaId, required this.mesaNumero});
+  BookingFormScreen({
+    required this.mesaId,
+    required this.mesaNumero,
+    required this.fechaHora,
+  });
 
   @override
   _BookingFormScreenState createState() => _BookingFormScreenState();
@@ -50,15 +52,34 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
   final _nombreController = TextEditingController();
   final _telefonoController = TextEditingController();
   final _personasController = TextEditingController();
-  final _fechaController = TextEditingController();
   final _emailController = TextEditingController();
 
   final _formKey = GlobalKey<FormState>();
 
+  String _fechaHoraParaMostrar = '';
+
+  @override
+  void initState() {
+    super.initState();
+    // --- LÓGICA DE HORA CORREGIDA ---
+    try {
+      // 1. Leemos la fecha UTC (ej: ...T23:00:00Z)
+      final dateTime = DateTime.parse(widget.fechaHora);
+
+      // 2. La convertimos de vuelta a "local" (ej: 7:00 PM)
+      final localDateTime = dateTime.toLocal();
+
+      // 3. La mostramos en español
+      _fechaHoraParaMostrar =
+          DateFormat('EEE, d MMMM, hh:mm a', 'es').format(localDateTime);
+    } catch (e) {
+      _fechaHoraParaMostrar = 'Fecha inválida';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      // 2. El título ahora muestra la mesa seleccionada
       appBar: AppBar(title: Text('Reservar Mesa: ${widget.mesaNumero}')),
       body: Mutation(
         options: MutationOptions(
@@ -70,7 +91,6 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
                     content: Text('¡Reserva creada con éxito!'),
                     backgroundColor: Colors.green),
               );
-              // Regresa dos pantallas atrás (hasta el home)
               Navigator.of(context).popUntil((route) => route.isFirst);
             }
           },
@@ -89,12 +109,30 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
             child: Form(
               key: _formKey,
               child: SingleChildScrollView(
-                // Añadido para evitar overflow del teclado
                 child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    Text('Confirmar Reserva para:',
+                        style: Theme.of(context).textTheme.titleMedium),
+                    Text(
+                      _fechaHoraParaMostrar, // Muestra la hora local (ej: 7:00 PM)
+                      style: Theme.of(context)
+                          .textTheme
+                          .titleLarge
+                          ?.copyWith(fontWeight: FontWeight.bold),
+                    ),
+                    SizedBox(height: 20),
                     TextFormField(
                       controller: _nombreController,
                       decoration: InputDecoration(labelText: 'Nombre Completo'),
+                      validator: (value) =>
+                          value!.isEmpty ? 'Campo requerido' : null,
+                    ),
+                    TextFormField(
+                      controller: _emailController,
+                      decoration:
+                          InputDecoration(labelText: 'Correo Electrónico'),
+                      keyboardType: TextInputType.emailAddress,
                       validator: (value) =>
                           value!.isEmpty ? 'Campo requerido' : null,
                     ),
@@ -106,15 +144,6 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
                           value!.isEmpty ? 'Campo requerido' : null,
                     ),
                     TextFormField(
-                      // <-- AÑADE ESTE WIDGET
-                      controller: _emailController,
-                      decoration:
-                          InputDecoration(labelText: 'Correo Electrónico'),
-                      keyboardType: TextInputType.emailAddress,
-                      validator: (value) =>
-                          value!.isEmpty ? 'Campo requerido' : null,
-                    ),
-                    TextFormField(
                       controller: _personasController,
                       decoration:
                           InputDecoration(labelText: 'Cantidad de Personas'),
@@ -122,25 +151,15 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
                       validator: (value) =>
                           value!.isEmpty ? 'Campo requerido' : null,
                     ),
-                    TextFormField(
-                      controller: _fechaController,
-                      decoration: InputDecoration(
-                          labelText: 'Fecha y Hora (AAAA-MM-DDTHH:MM:SSZ)'),
-                      validator: (value) =>
-                          value!.isEmpty ? 'Campo requerido' : null,
-                      // Ej: 2025-11-10T20:00:00Z
-                    ),
                     SizedBox(height: 20),
                     ElevatedButton(
                       child: Text('Confirmar Reserva'),
                       onPressed: () {
                         if (_formKey.currentState!.validate()) {
-                          // 3. ¡ACTUALIZADO!
-                          // Ahora pasamos también el widget.mesaId
                           runMutation({
                             'nombre': _nombreController.text,
                             'telefono': _telefonoController.text,
-                            'fecha': _fechaController.text,
+                            'fecha': widget.fechaHora, // <-- ¡Usa la fecha UTC!
                             'personas': int.parse(_personasController.text),
                             'mesaId': widget.mesaId,
                             'email': _emailController.text,
